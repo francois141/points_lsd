@@ -723,7 +723,7 @@ static void grad_angle_orientation(image_double in, double threshold, image_doub
   g = new_image_double(in->xsize, in->ysize);
 
   /* get memory for the image of gradient modulus */
-  // modgrad = new_image_double(in->xsize, in->ysize);
+  modgrad = new_image_double(in->xsize, in->ysize);
 
   /* 'undefined' on the up and left boundaries */
   for (x = 0; x < p; x++) g->data[x] = NOTDEF;
@@ -753,7 +753,7 @@ static void grad_angle_orientation(image_double in, double threshold, image_doub
       norm2 = gx * gx + gy * gy;
       norm = sqrt(norm2 / 4.0); /* gradient norm */
 
-      // modgrad->data[adr] = norm; /* store gradient norm */
+      modgrad->data[adr] = norm; /* store gradient norm */
 
       if (norm <= threshold) /* norm too small, gradient no defined */
         g->data[adr] = NOTDEF; /* gradient angle not defined */
@@ -2207,6 +2207,356 @@ double *lsd(int *n_out, double *img, int X, int Y, double gradientThreshold, dou
   return result;
 }
 /*----------------------------------------------------------------------------*/
+
+// Only the distance field changes
+
+static void grad_angle_orientation_df(image_double in, double threshold, image_double& g, image_double& modgrad){
+  unsigned int n, p, x, y, adr;
+  double com1, com2, gx, gy, norm, norm2;
+  n = in->ysize;
+  p = in->xsize;
+
+  /* allocate output image */
+  g = new_image_double(in->xsize, in->ysize);
+
+  /* get memory for the image of gradient modulus */
+  // modgrad = new_image_double(in->xsize, in->ysize);
+
+  /* 'undefined' on the up and left boundaries */
+  for (x = 0; x < p; x++) g->data[x] = NOTDEF;
+  for (y = 0; y < n; y++) g->data[p * y] = NOTDEF;
+
+  /* compute gradient on the remaining pixels */
+  for (x = 1; x < p; x++)
+    for (y = 1; y < n; y++) {
+      adr = y * p + x;
+
+      /*
+         Norm 2 computation using 2x2 pixel window:
+           A B
+           C D
+         and
+           com1 = D-A,  com2 = B-C.
+         Then
+           gx = B+D - (A+C)   horizontal difference
+           gy = C+D - (A+B)   vertical difference
+         com1 and com2 are just to avoid 2 additions.
+       */
+      com1 = in->data[adr] - in->data[adr - p - 1];
+      com2 = in->data[adr - p] - in->data[adr - 1];
+
+      gx = com1 + com2; /* gradient x component */
+      gy = com1 - com2; /* gradient y component */
+      norm2 = gx * gx + gy * gy;
+      norm = sqrt(norm2 / 4.0); /* gradient norm */
+
+      // modgrad->data[adr] = norm; /* store gradient norm */
+
+      if (norm <= threshold) /* norm too small, gradient no defined */
+        g->data[adr] = NOTDEF; /* gradient angle not defined */
+      else {
+        /* gradient angle computation */
+        //g->data[adr] = atan2(gx, -gy);
+        g->data[adr] = atan2(-gx, gy);
+      }
+    }
+}
+
+
+static image_double ll_angle_df(image_double in, double threshold,
+                             struct coorlist **list_p, void **mem_p,
+                             image_double& modgrad, image_double& g, unsigned int n_bins) {
+  unsigned int n, p, x, y, i;
+  double norm;
+  /* the rest of the variables are used for pseudo-ordering
+     the gradient magnitude values */
+  int list_count = 0;
+  struct coorlist *list;
+  struct coorlist **range_l_s; /* array of pointers to start of bin list */
+  struct coorlist **range_l_e; /* array of pointers to end of bin list */
+  struct coorlist *start;
+  struct coorlist *end;
+  double max_grad = 0.0;
+
+  /* check parameters */
+  if (in == nullptr || in->data == nullptr || in->xsize == 0 || in->ysize == 0)
+    error("ll_angle: invalid image.");
+  if (threshold < 0.0) error("ll_angle: 'threshold' must be positive.");
+  if (list_p == nullptr) error("ll_angle: nullptr pointer 'list_p'.");
+  if (mem_p == nullptr) error("ll_angle: nullptr pointer 'mem_p'.");
+  if (n_bins == 0) error("ll_angle: 'n_bins' must be positive.");
+
+  /* image size shortcuts */
+  n = in->ysize;
+  p = in->xsize;
+
+  /* get memory for "ordered" list of pixels */
+  list = (struct coorlist *) calloc(n * p, sizeof(struct coorlist));
+  *mem_p = (void *) list;
+  range_l_s = (struct coorlist **) calloc((size_t) n_bins,
+                                          sizeof(struct coorlist *));
+  range_l_e = (struct coorlist **) calloc((size_t) n_bins,
+                                          sizeof(struct coorlist *));
+  if (list == nullptr || range_l_s == nullptr || range_l_e == nullptr)
+    error("not enough memory.");
+  for (i = 0; i < n_bins; i++) range_l_s[i] = range_l_e[i] = nullptr;
+
+  if (modgrad == nullptr || g == nullptr) {
+    grad_angle_orientation_df(in, threshold, g, modgrad);
+  }
+
+  /* compute histogram of gradient values */
+  for (x = 0; x < p - 1; x++)
+    for (y = 0; y < n - 1; y++) {
+      norm = modgrad->data[y * p + x];
+
+      /* store the point in the right bin according to its norm */
+      i = (unsigned int) (norm * (double) n_bins / max_grad);
+      if (i >= n_bins) i = n_bins - 1;
+      if (range_l_e[i] == nullptr)
+        range_l_s[i] = range_l_e[i] = list + list_count++;
+      else {
+        range_l_e[i]->next = list + list_count;
+        range_l_e[i] = list + list_count++;
+      }
+      range_l_e[i]->x = (int) x;
+      range_l_e[i]->y = (int) y;
+      range_l_e[i]->next = nullptr;
+    }
+
+  /* Make the list of pixels (almost) ordered by norm value.
+     It starts by the larger bin, so the list starts by the
+     pixels with the highest gradient value. Pixels would be ordered
+     by norm value, up to a precision given by max_grad/n_bins.
+   */
+  for (i = n_bins - 1; i > 0 && range_l_s[i] == nullptr; i--);
+  start = range_l_s[i];
+  end = range_l_e[i];
+  if (start != nullptr)
+    while (i > 0) {
+      --i;
+      if (range_l_s[i] != nullptr) {
+        end->next = range_l_s[i];
+        end = range_l_e[i];
+      }
+    }
+  *list_p = start;
+
+  /* free memory */
+  free((void *) range_l_s);
+  free((void *) range_l_e);
+
+  return g;
+}
+
+double *LineSegmentDetectionDF(int *n_out,
+                             double *img, int X, int Y,
+                             double scale, double sigma_scale, double quant,
+                             double ang_th, double log_eps, double density_th,
+                             int n_bins, bool grad_nfa,
+                             double * modgrad_ptr, double * angles_ptr,
+                             int **reg_img, int *reg_x, int *reg_y) {
+  image_double image;
+  ntuple_list out = new_ntuple_list(7);
+  double *return_value;
+  image_double scaled_image;
+  image_char used;
+  image_int region = nullptr;
+  struct coorlist *list_p, *list_pp;
+  void *mem_p, *mem_pp;
+  struct rect rec;
+  struct point *reg;
+  int reg_size, min_reg_size, i;
+  unsigned int xsize, ysize;
+  double rho, reg_angle, prec, p, log_nfa, logNT;
+  int ls_count = 0;                   /* line segments are numbered 1,2,3,... */
+
+  /* check parameters */
+  if (img == nullptr || X <= 0 || Y <= 0) error("invalid image input.");
+  if (scale <= 0.0) error("'scale' value must be positive.");
+  if (sigma_scale <= 0.0) error("'sigma_scale' value must be positive.");
+  if (quant < 0.0) error("'quant' value must be positive.");
+  if (ang_th <= 0.0 || ang_th >= 180.0)
+    error("'ang_th' value must be in the range (0,180).");
+  if (density_th < 0.0 || density_th > 1.0)
+    error("'density_th' value must be in the range [0,1].");
+  if (n_bins <= 0) error("'n_bins' value must be positive.");
+
+
+  /* angle tolerance */
+  prec = M_PI * ang_th / 180.0;
+  p = ang_th / 180.0;
+  rho = quant / sin(prec); /* gradient magnitude threshold */
+  // Iago
+  rho = UPM_GRADIENT_THRESHOLD_LSD;
+  // std::cout << "LSD Gradient threshold: " << rho << std::endl;
+
+  image_double modgrad{}, angles{};
+  image_double img_gradnorm{}, img_grad_angle{};
+  if (modgrad_ptr) {
+    modgrad = new_image_double_ptr(X, Y, modgrad_ptr);
+  }
+  if (angles_ptr) {
+    angles = new_image_double_ptr(X, Y, angles_ptr);
+  }
+
+  /* load and scale image (if necessary) and compute angle at each pixel */
+  image = new_image_double_ptr((unsigned int) X, (unsigned int) Y, img);
+  scaled_image = gaussian_sampler(image, scale, sigma_scale);
+  if (scale != 1.0 || true && false) {
+    if (grad_nfa)
+      ll_angle_df(scaled_image, rho, &list_pp, &mem_pp, img_gradnorm, img_grad_angle, (unsigned int) n_bins);
+    ll_angle_df(scaled_image, rho, &list_p, &mem_p, modgrad, angles, (unsigned int) n_bins);
+    
+  } else {
+    if (grad_nfa)
+      ll_angle_df(image, rho, &list_pp, &mem_pp, img_gradnorm, img_grad_angle, (unsigned int) n_bins);
+    ll_angle_df(image, rho, &list_p, &mem_p, modgrad, angles, (unsigned int) n_bins);
+  }
+  free_image_double(scaled_image);
+  xsize = angles->xsize;
+  ysize = angles->ysize;
+
+  /* Number of Tests - NT
+
+     The theoretical number of tests is Np.(XY)^(5/2)
+     where X and Y are number of columns and rows of the image.
+     Np corresponds to the number of angle precisions considered.
+     As the procedure 'rect_improve' tests 5 times to halve the
+     angle precision, and 5 more times after improving other factors,
+     11 different precision values are potentially tested. Thus,
+     the number of tests is
+       11 * (X*Y)^(5/2)
+     whose logarithm value is
+       log10(11) + 5/2 * (log10(X) + log10(Y)).
+  */
+  logNT = 5.0 * (log10((double) xsize) + log10((double) ysize)) / 2.0
+      + log10(11.0);
+  min_reg_size = (int) (-logNT / log10(p)); /* minimal number of points in region
+                                             that can give a meaningful event */
+
+
+  /* initialize some structures */
+  if (reg_img != nullptr && reg_x != nullptr && reg_y != nullptr) /* save region data */
+    region = new_image_int_ini(angles->xsize, angles->ysize, 0);
+  used = new_image_char_ini(xsize, ysize, NOTUSED);
+  reg = (struct point *) calloc((size_t) (xsize * ysize), sizeof(struct point));
+  if (reg == nullptr) error("not enough memory!");
+
+
+  /* search for line segments */
+  for (; list_p != nullptr; list_p = list_p->next)
+    if (used->data[list_p->x + list_p->y * used->xsize] == NOTUSED &&
+        angles->data[list_p->x + list_p->y * angles->xsize] != NOTDEF)
+      /* there is no risk of double comparison problems here
+         because we are only interested in the exact NOTDEF value */
+    {
+      /* find the region of connected point and ~equal angle */
+      region_grow(list_p->x, list_p->y, angles, reg, &reg_size,
+                  &reg_angle, used, prec);
+
+      /* reject small regions */
+      if (reg_size < min_reg_size) continue;
+
+      /* construct rectangular approximation for the region */
+      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec);
+
+      /* Check if the rectangle exceeds the minimal density of
+         region points. If not, try to improve the region.
+         The rectangle will be rejected if the final one does
+         not fulfill the minimal density condition.
+         This is an addition to the original LSD algorithm published in
+         "LSD: A Fast Line Segment Detector with a False Detection Control"
+         by R. Grompone von Gioi, J. Jakubowicz, J.M. Morel, and G. Randall.
+         The original algorithm is obtained with density_th = 0.0.
+       */
+      // if (!refine(reg, &reg_size, modgrad, reg_angle,
+      //             prec, p, &rec, used, angles, density_th))
+      //   continue;
+
+      /* compute NFA value */
+      if(grad_nfa)
+        log_nfa = rect_improve(&rec, img_grad_angle, logNT, log_eps);
+      else
+        log_nfa = rect_improve(&rec, angles, logNT, log_eps);
+      if (log_nfa <= log_eps) continue;
+
+      /* A New Line Segment was found! */
+      ++ls_count;  /* increase line segment counter */
+
+      /*
+         The gradient was computed with a 2x2 mask, its value corresponds to
+         points with an offset of (0.5,0.5), that should be added to output.
+         The coordinates origin is at the center of pixel (0,0).
+       */
+      // rec.x1 += 0.5;
+      // rec.y1 += 0.5;
+      // rec.x2 += 0.5;
+      // rec.y2 += 0.5;
+
+      /* scale the result values if a subsampling was performed */
+      if (scale != 1.0) {
+        rec.x1 /= scale;
+        rec.y1 /= scale;
+        rec.x2 /= scale;
+        rec.y2 /= scale;
+        rec.width /= scale;
+      }
+
+      /* add line segment found to output */
+      add_7tuple(out, rec.x1, rec.y1, rec.x2, rec.y2,
+                 rec.width, rec.p, log_nfa);
+
+      /* add region number to 'region' image if needed */
+      if (region != nullptr)
+        for (i = 0; i < reg_size; i++)
+          region->data[reg[i].x + reg[i].y * region->xsize] = ls_count;
+    }
+
+
+  /* free memory */
+  free((void *) image);   /* only the double_image structure should be freed,
+                               the data pointer was provided to this functions
+                               and should not be destroyed.                 */
+  angles_ptr ? free(angles) : free_image_double(angles);
+  modgrad_ptr ? free(modgrad) : free_image_double(modgrad);
+  if (grad_nfa) {
+    free_image_double(img_gradnorm);
+    free_image_double(img_grad_angle);
+  }
+
+  free_image_char(used);
+  free((void *) reg);
+  free((void *) mem_p);
+  if (grad_nfa)
+    free((void *) mem_pp);
+
+  /* return the result */
+  if (reg_img != nullptr && reg_x != nullptr && reg_y != nullptr) {
+    if (region == nullptr) error("'region' should be a valid image.");
+    *reg_img = region->data;
+    if (region->xsize > (unsigned int) INT_MAX)
+      error("region image to big to fit in INT sizes.");
+    *reg_x = (int) (region->xsize);
+    *reg_y = (int) (region->ysize);
+
+    /* free the 'region' structure.
+       we cannot use the function 'free_image_int' because we need to keep
+       the memory with the image data to be returned by this function. */
+    free((void *) region);
+  }
+  if (out->size > (unsigned int) INT_MAX)
+    error("too many detections to fit in an INT.");
+  *n_out = (int) (out->size);
+
+  return_value = out->values;
+  free((void *) out);  /* only the 'ntuple_list' structure must be freed,
+                            but the 'values' pointer must be keep to return
+                            as a result. */
+
+  return return_value;
+}
+
 
 
 

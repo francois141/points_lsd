@@ -146,6 +146,15 @@ double * LineSegmentDetection( int * n_out,
                                int ** reg_img = nullptr,
                                int * reg_x = nullptr, int * reg_y = nullptr);
 
+double * LineSegmentDetectionDF( int * n_out,
+                               double * img, int X, int Y,
+                               double scale, double sigma_scale, double quant,
+                               double ang_th, double log_eps, double density_th,
+                               int n_bins, bool grad_nfa,
+                               double * modgrad = nullptr, double * angles = nullptr,
+                               int ** reg_img = nullptr,
+                               int * reg_x = nullptr, int * reg_y = nullptr);
+
 double *LineSegmentDetectionFromPoints(int *n_out,
                              double *img, int X, int Y,
                              double scale, double sigma_scale, double quant,
