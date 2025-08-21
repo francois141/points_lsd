@@ -163,6 +163,14 @@ double *LineSegmentDetectionFromPoints(int *n_out,
                              double * modgrad_ptr, double * angles_ptr, int* points, int number_points,
                              int **reg_img, int *reg_x, int *reg_y);
 
+int LineSegmentDetectionFromPointsLearn(int *n_out,
+                             double *img, int X, int Y,
+                             double scale, double sigma_scale, double quant,
+                             double ang_th, double log_eps, double density_th,
+                             int n_bins, bool grad_nfa,
+                             double * modgrad_ptr, double * angles_ptr, int* points, int number_points,
+                             int **reg_img, int *reg_x, int *reg_y);
+
 double * LineSegmentDetectionOptimal( int * n_out,
                                double * img, int X, int Y,
                                double scale, double sigma_scale, double quant,
