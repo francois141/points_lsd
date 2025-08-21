@@ -2503,7 +2503,7 @@ static image_double ll_angle_df(image_double in, double threshold,
   if (threshold < 0.0) error("ll_angle: 'threshold' must be positive.");
   if (list_p == nullptr) error("ll_angle: nullptr pointer 'list_p'.");
   if (mem_p == nullptr) error("ll_angle: nullptr pointer 'mem_p'.");
-  if (n_bins == 0) error("ll_angle: 'n_bins' must be positive.");
+  if (n_bins == 0)  error("ll_angle: 'n_bins' must be positive.");
 
   /* image size shortcuts */
   n = in->ysize;
@@ -2776,69 +2776,7 @@ double *LineSegmentDetectionDF(int *n_out,
   return return_value;
 }
 
-
-
-
 // From points
-
-static void grad_angle_orientation_points(image_double in, double threshold, image_double& g, image_double& modgrad){
-  unsigned int n, p, x, y, adr;
-  double com1, com2, gx, gy, norm, norm2;
-  n = in->ysize;
-  p = in->xsize;
-
-  /* allocate output image */
-  g = new_image_double(in->xsize, in->ysize);
-
-  /* get memory for the image of gradient modulus */
-  // modgrad = new_image_double(in->xsize, in->ysize);
-
-  /* 'undefined' on the up and left boundaries */
-  for (x = 0; x < p; x++) g->data[x] = NOTDEF;
-  for (y = 0; y < n; y++) g->data[p * y] = NOTDEF;
-
-  /* compute gradient on the remaining pixels */
-  for (x = 1; x < p; x++)
-    for (y = 1; y < n; y++) {
-      adr = y * p + x;
-
-      /*
-         Norm 2 computation using 2x2 pixel window:
-           A B
-           C D
-         and
-           com1 = D-A,  com2 = B-C.
-         Then
-           gx = B+D - (A+C)   horizontal difference
-           gy = C+D - (A+B)   vertical difference
-         com1 and com2 are just to avoid 2 additions.
-       */
-      com1 = in->data[adr] - in->data[adr - p - 1];
-      com2 = in->data[adr - p] - in->data[adr - 1];
-
-      gx = com1 + com2; /* gradient x component */
-      gy = com1 - com2; /* gradient y component */
-      norm2 = gx * gx + gy * gy;
-      norm = sqrt(norm2 / 4.0); /* gradient norm */
-
-      if (norm <= threshold) /* norm too small, gradient no defined */
-        g->data[adr] = NOTDEF; /* gradient angle not defined */
-      else {
-        /* gradient angle computation */
-        g->data[adr] = atan2(-gx, gy);
-      }
-    }
-}
-
-
-static image_double ll_angle_points(image_double in, double threshold,
-                             struct coorlist **list_p, void **mem_p,
-                             image_double& modgrad, image_double& g, unsigned int n_bins) {
-  
-  grad_angle_orientation_points(in, threshold, g, modgrad);
-  return g;
-}
-
 double *LineSegmentDetectionFromPoints(int *n_out,
                              double *img, int X, int Y,
                              double scale, double sigma_scale, double quant,
@@ -2891,18 +2829,6 @@ double *LineSegmentDetectionFromPoints(int *n_out,
 
   /* load and scale image (if necessary) and compute angle at each pixel */
   image = new_image_double_ptr((unsigned int) X, (unsigned int) Y, img);
-  scaled_image = gaussian_sampler(image, scale, sigma_scale);
-  if (scale != 1.0 || true) {
-    if (grad_nfa)
-      ll_angle_points(scaled_image, rho, &list_pp, &mem_pp, img_gradnorm, img_grad_angle, (unsigned int) n_bins);
-    ll_angle_points(scaled_image, rho, &list_p, &mem_p, modgrad, angles, (unsigned int) n_bins);
-    
-  } else {
-    if (grad_nfa)
-      ll_angle_points(image, rho, &list_pp, &mem_pp, img_gradnorm, img_grad_angle, (unsigned int) n_bins);
-    ll_angle_points(image, rho, &list_p, &mem_p, modgrad, angles, (unsigned int) n_bins);
-  }
-  free_image_double(scaled_image);
   xsize = angles->xsize;
   ysize = angles->ysize;
 
