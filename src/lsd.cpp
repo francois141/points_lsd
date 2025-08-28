@@ -2776,6 +2776,15 @@ double *LineSegmentDetectionDF(int *n_out,
   return return_value;
 }
 
+
+#include <mutex>
+#include <thread>
+#include <functional>
+using namespace std;
+/*----------------------------------------------------------------------------*/
+/** LSD full interface.
+ */
+
 // From points
 double *LineSegmentDetectionFromPoints(int *n_out,
                              double *img, int X, int Y,
@@ -2792,9 +2801,8 @@ double *LineSegmentDetectionFromPoints(int *n_out,
   image_int region = nullptr;
   struct coorlist *list_p, *list_pp;
   void *mem_p, *mem_pp;
-  struct rect rec;
   struct point *reg;
-  int reg_size, min_reg_size, i;
+  int min_reg_size, i;
   unsigned int xsize, ysize;
   double rho, reg_angle, prec, p, log_nfa, logNT;
   int ls_count = 0;                   /* line segments are numbered 1,2,3,... */
@@ -2858,79 +2866,95 @@ double *LineSegmentDetectionFromPoints(int *n_out,
   reg = (struct point *) calloc((size_t) (xsize * ysize), sizeof(struct point));
   if (reg == nullptr) error("not enough memory!");
 
-  int counter = 0;
-  for(int i = 0; i < number_points;i++) {
-    int x = points[2*i];
-    int y = points[2*i+1];
+  const unsigned int numberThreads = 1;
 
-    if (used->data[x + y * used->xsize] == NOTUSED &&
-        angles->data[x + y * angles->xsize] != NOTDEF)
-      // there is no risk of double comparison problems here
-      //   because we are only interested in the exact NOTDEF value 
-    {
-      // find the region of connected point and ~equal angle 
-      region_grow(x, y, angles, reg, &reg_size,
-                  &reg_angle, used, prec);
+  std::mutex mutex;
 
-      /* reject small regions */
-      if (reg_size < min_reg_size) continue;
+  /* search for line segments */
+  function<void(int)> worker = [&](int index) {
+    for(int i = 0; i < number_points;i++) {
+      int x = points[2*i];
+      int y = points[2*i+1];
 
-      /* construct rectangular approximation for the region */
-      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec);
 
-      /* Check if the rectangle exceeds the minimal density of
-         region points. If not, try to improve the region.
-         The rectangle will be rejected if the final one does
-         not fulfill the minimal density condition.
-         This is an addition to the original LSD algorithm published in
-         "LSD: A Fast Line Segment Detector with a False Detection Control"
-         by R. Grompone von Gioi, J. Jakubowicz, J.M. Morel, and G. Randall.
-         The original algorithm is obtained with density_th = 0.0.
-       */
-      // if (!refine(reg, &reg_size, modgrad, reg_angle,
-      //             prec, p, &rec, used, angles, density_th))
-      //   continue;
 
-      /* compute NFA value */
-      if(grad_nfa)
-        log_nfa = rect_improve(&rec, img_grad_angle, logNT, log_eps);
-      else
-        log_nfa = rect_improve(&rec, angles, logNT, log_eps);
-      if (log_nfa <= log_eps) continue;
+      //if(x < used->xsize / 2 && index == 0) continue;
+      //if(x >= used->xsize / 2 && index == 1) continue;
 
-      /* A New Line Segment was found! */
-      ++ls_count;  /* increase line segment counter */
+      if (used->data[x + y * used->xsize] == NOTUSED &&
+          angles->data[x + y * angles->xsize] != NOTDEF)
+        /* there is no risk of double comparison problems here
+           because we are only interested in the exact NOTDEF value */
+      {
+        // We don't want to share those value accross the threads
+        // Otherwise the threads will fights for it
+        struct rect rec;
+        int reg_size;
+        double reg_angle;
+        /* find the region of connected point and ~equal angle */
+        region_grow(x, y, angles, reg, &reg_size,
+                    &reg_angle, used, prec);
 
-      /*
-         The gradient was computed with a 2x2 mask, its value corresponds to
-         points with an offset of (0.5,0.5), that should be added to output.
-         The coordinates origin is at the center of pixel (0,0).
-       */
-      // rec.x1 += 0.5;
-      // rec.y1 += 0.5;
-      // rec.x2 += 0.5;
-      // rec.y2 += 0.5;
+        /* reject small regions */
+        if (reg_size < min_reg_size) continue;
 
-      /* scale the result values if a subsampling was performed */
-      if (scale != 1.0) {
-        rec.x1 /= scale;
-        rec.y1 /= scale;
-        rec.x2 /= scale;
-        rec.y2 /= scale;
-        rec.width /= scale;
+        /* construct rectangular approximation for the region */
+        region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec);
+
+        /* Check if the rectangle exceeds the minimal density of
+           region points. If not, try to improve the region.
+           The rectangle will be rejected if the final one does
+           not fulfill the minimal density condition.
+           This is an addition to the original LSD algorithm published in
+           "LSD: A Fast Line Segment Detector with a False Detection Control"
+           by R. Grompone von Gioi, J. Jakubowicz, J.M. Morel, and G. Randall.
+           The original algorithm is obtained with density_th = 0.0.
+         */
+        // if (!refine(reg, &reg_size, modgrad, reg_angle,
+        //             prec, p, &rec, used, angles, density_th))
+        //   continue;
+
+        /* compute NFA value */
+        if(grad_nfa)
+          log_nfa = rect_improve(&rec, img_grad_angle, logNT, log_eps);
+        else
+          log_nfa = rect_improve(&rec, angles, logNT, log_eps);
+        if (log_nfa <= log_eps) continue;
+
+        /* A New Line Segment was found! */
+        ++ls_count;  /* increase line segment counter */
+
+        /* scale the result values if a subsampling was performed */
+        if (scale != 1.0) {
+          rec.x1 /= scale;
+          rec.y1 /= scale;
+          rec.x2 /= scale;
+          rec.y2 /= scale;
+          rec.width /= scale;
+        }
+
+        mutex.lock();
+        /* add line segment found to output */
+        add_7tuple(out, rec.x1, rec.y1, rec.x2, rec.y2,
+                   rec.width, rec.p, log_nfa);
+        mutex.unlock();
+
+        /* add region number to 'region' image if needed */
+        if (region != nullptr)
+          for (i = 0; i < reg_size; i++)
+            region->data[reg[i].x + reg[i].y * region->xsize] = ls_count;
       }
+     }
+  };
 
-      /* add line segment found to output */
-      add_7tuple(out, rec.x1, rec.y1, rec.x2, rec.y2,
-                 rec.width, rec.p, log_nfa);
-
-      /* add region number to 'region' image if needed */
-      if (region != nullptr)
-        for (i = 0; i < reg_size; i++)
-          region->data[reg[i].x + reg[i].y * region->xsize] = ls_count;
-    }
+  vector<thread> threads(numberThreads);
+  for(int i = 0; i < numberThreads;i++) {
+    threads[i] = std::thread(worker, i);
   }
 
+  for(int i = 0; i < numberThreads;i++) {
+    threads[i].join();
+  }
 
   /* free memory */
   free((void *) image);   /* only the double_image structure should be freed,
@@ -2974,6 +2998,8 @@ double *LineSegmentDetectionFromPoints(int *n_out,
 
   return return_value;
 }
+
+
 
 int LineSegmentDetectionFromPointsLearn(int *n_out,
                              double *img, int X, int Y,
