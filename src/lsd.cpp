@@ -2693,9 +2693,9 @@ double *LineSegmentDetectionFromPoints(int *n_out,
   void *mem_p, *mem_pp;
   struct rect rec;
   struct point *reg;
-  int min_reg_size, i;
+  int reg_size, min_reg_size, i;
   unsigned int xsize, ysize;
-  double rho, prec, p, log_nfa, logNT;
+  double rho, reg_angle, prec, p, log_nfa, logNT;
   int ls_count = 0;                   /* line segments are numbered 1,2,3,... */
 
   /* check parameters */
@@ -2708,6 +2708,7 @@ double *LineSegmentDetectionFromPoints(int *n_out,
   if (density_th < 0.0 || density_th > 1.0)
     error("'density_th' value must be in the range [0,1].");
   if (n_bins <= 0) error("'n_bins' value must be positive.");
+
 
   /* angle tolerance */
   prec = M_PI * ang_th / 180.0;
@@ -2728,6 +2729,18 @@ double *LineSegmentDetectionFromPoints(int *n_out,
 
   /* load and scale image (if necessary) and compute angle at each pixel */
   image = new_image_double_ptr((unsigned int) X, (unsigned int) Y, img);
+  scaled_image = gaussian_sampler(image, scale, sigma_scale);
+  if (scale != 1.0) {
+    if (grad_nfa)
+      ll_angle(scaled_image, rho, &list_pp, &mem_pp, img_gradnorm, img_grad_angle, (unsigned int) n_bins);
+    ll_angle(scaled_image, rho, &list_p, &mem_p, modgrad, angles, (unsigned int) n_bins);
+
+  } else {
+    if (grad_nfa)
+      ll_angle(image, rho, &list_pp, &mem_pp, img_gradnorm, img_grad_angle, (unsigned int) n_bins);
+    ll_angle(image, rho, &list_p, &mem_p, modgrad, angles, (unsigned int) n_bins);
+  }
+  free_image_double(scaled_image);
   xsize = angles->xsize;
   ysize = angles->ysize;
 
@@ -2758,74 +2771,107 @@ double *LineSegmentDetectionFromPoints(int *n_out,
   if (reg == nullptr) error("not enough memory!");
 
   int start_reg_idx = 0;
+
+  struct entry {
+    int reg_size;
+    double reg_angle;
+    int start_idx;
+  };
+
+  const unsigned int number_threads = 16;
+  std::vector<std::vector<entry>> entries(number_threads);
+  int amount = 0;
+
   for(int i = 0; i < number_points;i++) {
     int x = points[2*i];
     int y = points[2*i+1];
 
     if (used->data[x + y * used->xsize] == NOTUSED &&
         angles->data[x + y * angles->xsize] != NOTDEF)
-      // there is no risk of double comparison problems here
-      //   because we are only interested in the exact NOTDEF value 
+      /* there is no risk of double comparison problems here
+         because we are only interested in the exact NOTDEF value */
     {
-      // Two values are reg_size and reg_angle
-      int reg_size;
-      double reg_angle;
-      // Ensuite il faut encore deux valeurs, la start value de reg et la longeur de reg pour la fonction suivante
-
-      // find the region of connected point and ~equal angle 
+      /* find the region of connected point and ~equal angle */
       region_grow(x, y, angles, reg, &reg_size,
                   &reg_angle, used, prec, start_reg_idx);
 
-      /* construct rectangular approximation for the region */
-      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec, start_reg_idx);
+      int prev_start_idx = start_reg_idx;
 
       start_reg_idx += reg_size;
 
       /* reject small regions */
       if (reg_size < min_reg_size) continue;
 
-      /* Check if the rectangle exceeds the minimal density of
-         region points. If not, try to improve the region.
-         The rectangle will be rejected if the final one does
-         not fulfill the minimal density condition.
-         This is an addition to the original LSD algorithm published in
-         "LSD: A Fast Line Segment Detector with a False Detection Control"
-         by R. Grompone von Gioi, J. Jakubowicz, J.M. Morel, and G. Randall.
-         The original algorithm is obtained with density_th = 0.0.
-       */
-      // if (!refine(reg, &reg_size, modgrad, reg_angle,
-      //             prec, p, &rec, used, angles, density_th))
-      //   continue;
+      entries[amount++ % number_threads].push_back({
+        .reg_size = reg_size,
+        .reg_angle = reg_angle,
+        .start_idx = prev_start_idx
+      });
+    }
+  }
 
-      /* compute NFA value */
-      if(grad_nfa)
-        log_nfa = rect_improve(&rec, img_grad_angle, logNT, log_eps);
-      else
-        log_nfa = rect_improve(&rec, angles, logNT, log_eps);
-      if (log_nfa <= log_eps) continue;
+  std::function worker = [&](int idx) {
+    std::vector<struct rect> output;
+    for(const auto [reg_size, reg_angle, start_reg_idx]: entries[idx]) {
+        struct rect rec;
+        /* construct rectangular approximation for the region */
+        region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec, start_reg_idx);
 
-      /* A New Line Segment was found! */
-      ++ls_count;  /* increase line segment counter */
+        /* Check if the rectangle exceeds the minimal density of
+           region points. If not, try to improve the region.
+           The rectangle will be rejected if the final one does
+           not fulfill the minimal density condition.
+           This is an addition to the original LSD algorithm published in
+           "LSD: A Fast Line Segment Detector with a False Detection Control"
+           by R. Grompone von Gioi, J. Jakubowicz, J.M. Morel, and G. Randall.
+           The original algorithm is obtained with density_th = 0.0.
+         */
+        // if (!refine(reg, &reg_size, modgrad, reg_angle,
+        //             prec, p, &rec, used, angles, density_th))
+        //   continue;
 
-      /*
-         The gradient was computed with a 2x2 mask, its value corresponds to
-         points with an offset of (0.5,0.5), that should be added to output.
-         The coordinates origin is at the center of pixel (0,0).
-       */
-      // rec.x1 += 0.5;
-      // rec.y1 += 0.5;
-      // rec.x2 += 0.5;
-      // rec.y2 += 0.5;
+        /* compute NFA value */
+        if(grad_nfa)
+          log_nfa = rect_improve(&rec, img_grad_angle, logNT, log_eps);
+        else
+          log_nfa = rect_improve(&rec, angles, logNT, log_eps);
+        if (log_nfa <= log_eps) continue;
 
-      /* scale the result values if a subsampling was performed */
-      if (scale != 1.0) {
-        rec.x1 /= scale;
-        rec.y1 /= scale;
-        rec.x2 /= scale;
-        rec.y2 /= scale;
-        rec.width /= scale;
-      }
+        /* A New Line Segment was found! */
+        ++ls_count;  /* increase line segment counter */
 
+        /*
+           The gradient was computed with a 2x2 mask, its value corresponds to
+           points with an offset of (0.5,0.5), that should be added to output.
+           The coordinates origin is at the center of pixel (0,0).
+         */
+        // rec.x1 += 0.5;
+        // rec.y1 += 0.5;
+        // rec.x2 += 0.5;
+        // rec.y2 += 0.5;
+
+        /* scale the result values if a subsampling was performed */
+        if (scale != 1.0) {
+          rec.x1 /= scale;
+          rec.y1 /= scale;
+          rec.x2 /= scale;
+          rec.y2 /= scale;
+          rec.width /= scale;
+        }
+
+      output.push_back(rec);
+    }
+
+    return output;
+  };
+
+  std::vector<std::future<std::vector<struct rect>>> futures(number_threads);
+  for(int current_thread = 0; current_thread < futures.size(); current_thread++) {
+    futures[current_thread] = std::async(std::launch::async, worker, current_thread);
+  }
+
+  for(auto &future: futures) {
+    for(const rect rec: future.get()) {
       /* add line segment found to output */
       add_7tuple(out, rec.x1, rec.y1, rec.x2, rec.y2,
                  rec.width, rec.p, log_nfa);
