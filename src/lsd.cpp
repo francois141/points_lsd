@@ -2865,7 +2865,7 @@ double *LineSegmentDetectionFromPoints(int *n_out,
     return output;
   };
 
-  std::vector<std::future<std::vector<struct rect>>> futures(number_threads);
+  std::vector<std::future<std::vector<struct rect>>> futures(0);
   for(int current_thread = 0; current_thread < futures.size(); current_thread++) {
     futures[current_thread] = std::async(std::launch::async, worker, current_thread);
   }
