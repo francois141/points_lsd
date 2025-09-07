@@ -1916,7 +1916,7 @@ double *LineSegmentDetection(int *n_out,
     int start_idx;
   };
 
-  const unsigned int number_threads = 16;
+  const unsigned int number_threads = 1;
   std::vector<std::vector<entry>> entries(number_threads);
   int amount = 0;
 
