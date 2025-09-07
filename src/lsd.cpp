@@ -2001,23 +2001,35 @@ double *LineSegmentDetection(int *n_out,
     return output;
   };
 
-  std::vector<std::future<std::vector<struct rect>>> futures(number_threads);
+  for(const rect rec: worker(0)) {
+    // add line segment found to output
+    add_7tuple(out, rec.x1, rec.y1, rec.x2, rec.y2,
+               rec.width, rec.p, log_nfa);
+
+    // add region number to 'region' image if needed
+    if (region != nullptr)
+      for (i = 0; i < reg_size; i++)
+        region->data[reg[i].x + reg[i].y * region->xsize] = ls_count;
+  }
+
+  /*std::vector<std::future<std::vector<struct rect>>> futures(number_threads);
   for(int current_thread = 0; current_thread < futures.size(); current_thread++) {
     futures[current_thread] = std::async(std::launch::async, worker, current_thread);
   }
 
   for(auto &future: futures) {
-    for(const rect rec: future.get()) {
-      /* add line segment found to output */
+    auto v = future.get();
+    for(const rect rec: v) {
+      // add line segment found to output
       add_7tuple(out, rec.x1, rec.y1, rec.x2, rec.y2,
                  rec.width, rec.p, log_nfa);
 
-      /* add region number to 'region' image if needed */
+      // add region number to 'region' image if needed
       if (region != nullptr)
         for (i = 0; i < reg_size; i++)
           region->data[reg[i].x + reg[i].y * region->xsize] = ls_count;
     }
-  }
+  }*/
 
 
   /* free memory */
