@@ -103,7 +103,6 @@
 #include "lsd.h"
 
 #include <future>
-#include <opencv2/core/types.hpp>
 
 /** ln(10) */
 #ifndef M_LN10
