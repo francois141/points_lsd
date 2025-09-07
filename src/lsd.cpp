@@ -2810,8 +2810,9 @@ double *LineSegmentDetectionFromPoints(int *n_out,
     }
   }
 
+  std::vector<struct rect> output;
+
   std::function worker = [&](int idx) {
-    std::vector<struct rect> output;
     for(const auto [reg_size, reg_angle, start_reg_idx]: entries[idx]) {
         struct rect rec;
         /* construct rectangular approximation for the region */
@@ -2861,11 +2862,12 @@ double *LineSegmentDetectionFromPoints(int *n_out,
 
       output.push_back(rec);
     }
-
-    return output;
   };
 
-  for(const rect rec: worker(0)) {
+  std::thread test(worker, 0);
+  test.join();
+
+  for(const rect rec: output) {
     // add line segment found to output
     add_7tuple(out, rec.x1, rec.y1, rec.x2, rec.y2,
                rec.width, rec.p, log_nfa);
