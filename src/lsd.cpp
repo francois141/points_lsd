@@ -102,6 +102,9 @@
 #include <iostream>
 #include "lsd.h"
 
+#include <future>
+#include <opencv2/core/types.hpp>
+
 /** ln(10) */
 #ifndef M_LN10
 #define M_LN10 2.30258509299404568402
@@ -1527,7 +1530,7 @@ static double rect_nfa(struct rect *rec, image_double angles, double logNT) {
     get better numeric precision).
  */
 static double get_theta(struct point *reg, int reg_size, double x, double y,
-                        image_double modgrad, double reg_angle, double prec) {
+                        image_double modgrad, double reg_angle, double prec, int start_reg_idx) {
   double lambda, theta, weight;
   double Ixx = 0.0;
   double Iyy = 0.0;
@@ -1542,7 +1545,7 @@ static double get_theta(struct point *reg, int reg_size, double x, double y,
   if (prec < 0.0) error("get_theta: 'prec' must be positive.");
 
   /* compute inertia matrix */
-  for (i = 0; i < reg_size; i++) {
+  for (i = start_reg_idx; i < start_reg_idx + reg_size; i++) {
     weight = std::max(modgrad->data[reg[i].x + reg[i].y * modgrad->xsize], 0.01);
     Ixx += ((double) reg[i].y - y) * ((double) reg[i].y - y) * weight;
     Iyy += ((double) reg[i].x - x) * ((double) reg[i].x - x) * weight;
@@ -1569,7 +1572,7 @@ static double get_theta(struct point *reg, int reg_size, double x, double y,
  */
 static void region2rect(struct point *reg, int reg_size,
                         image_double modgrad, double reg_angle,
-                        double prec, double p, struct rect *rec) {
+                        double prec, double p, struct rect *rec, int start_reg_idx) {
   double x, y, dx, dy, l, w, theta, weight, sum, l_min, l_max, w_min, w_max;
   int i;
 
@@ -1591,7 +1594,7 @@ static void region2rect(struct point *reg, int reg_size,
      and x_i,y_i are its coordinates.
    */
   x = y = sum = 0.0;
-  for (i = 0; i < reg_size; i++) {
+  for (i = start_reg_idx; i < start_reg_idx + reg_size; i++) {
     weight = std::max(modgrad->data[reg[i].x + reg[i].y * modgrad->xsize], 0.01);
     x += (double) reg[i].x * weight;
     y += (double) reg[i].y * weight;
@@ -1602,7 +1605,7 @@ static void region2rect(struct point *reg, int reg_size,
   y /= sum;
 
   /* theta */
-  theta = get_theta(reg, reg_size, x, y, modgrad, reg_angle, prec);
+  theta = get_theta(reg, reg_size, x, y, modgrad, reg_angle, prec, start_reg_idx);
 
   /* length and width:
 
@@ -1619,7 +1622,7 @@ static void region2rect(struct point *reg, int reg_size,
   dx = cos(theta);
   dy = sin(theta);
   l_min = l_max = w_min = w_max = 0.0;
-  for (i = 0; i < reg_size; i++) {
+  for (i = start_reg_idx; i < start_reg_idx + reg_size; i++) {
     l = ((double) reg[i].x - x) * dx + ((double) reg[i].y - y) * dy;
     w = -((double) reg[i].x - x) * dy + ((double) reg[i].y - y) * dx;
 
@@ -1659,7 +1662,7 @@ static void region2rect(struct point *reg, int reg_size,
  */
 static void region_grow(int x, int y, image_double angles, struct point *reg,
                         int *reg_size, double *reg_angle, image_char used,
-                        double prec) {
+                        double prec, int start_reg_idx) {
   double sumdx, sumdy;
   int xx, yy, i;
 
@@ -1676,15 +1679,15 @@ static void region_grow(int x, int y, image_double angles, struct point *reg,
 
   /* first point of the region */
   *reg_size = 1;
-  reg[0].x = x;
-  reg[0].y = y;
+  reg[start_reg_idx].x = x;
+  reg[start_reg_idx].y = y;
   *reg_angle = angles->data[x + y * angles->xsize];  /* region's angle */
   sumdx = cos(*reg_angle);
   sumdy = sin(*reg_angle);
   used->data[x + y * used->xsize] = USED;
 
   /* try neighbors as new region points */
-  for (i = 0; i < *reg_size; i++)
+  for (i = start_reg_idx; i < *reg_size + start_reg_idx; i++)
     for (xx = reg[i].x - 1; xx <= reg[i].x + 1; xx++)
       for (yy = reg[i].y - 1; yy <= reg[i].y + 1; yy++)
         if (xx >= 0 && yy >= 0 && xx < (int) used->xsize && yy < (int) used->ysize &&
@@ -1692,8 +1695,8 @@ static void region_grow(int x, int y, image_double angles, struct point *reg,
             isaligned(xx, yy, angles, *reg_angle, prec)) {
           /* add point */
           used->data[xx + yy * used->xsize] = USED;
-          reg[*reg_size].x = xx;
-          reg[*reg_size].y = yy;
+          reg[start_reg_idx + *reg_size].x = xx;
+          reg[start_reg_idx + *reg_size].y = yy;
           ++(*reg_size);
 
           /* update region's angle */
@@ -1801,153 +1804,6 @@ static double rect_improve(struct rect *rec, image_double angles,
   return log_nfa;
 }
 
-/*----------------------------------------------------------------------------*/
-/** Reduce the region size, by elimination the points far from the
-    starting point, until that leads to rectangle with the right
-    density of region points or to discard the region if too small.
- */
-static int reduce_region_radius(struct point *reg, int *reg_size,
-                                image_double modgrad, double reg_angle,
-                                double prec, double p, struct rect *rec,
-                                image_char used, image_double angles,
-                                double density_th) {
-  double density, rad1, rad2, rad, xc, yc;
-  int i;
-
-  /* check parameters */
-  if (reg == nullptr) error("reduce_region_radius: invalid pointer 'reg'.");
-  if (reg_size == nullptr)
-    error("reduce_region_radius: invalid pointer 'reg_size'.");
-  if (prec < 0.0) error("reduce_region_radius: 'prec' must be positive.");
-  if (rec == nullptr) error("reduce_region_radius: invalid pointer 'rec'.");
-  if (used == nullptr || used->data == nullptr)
-    error("reduce_region_radius: invalid image 'used'.");
-  if (angles == nullptr || angles->data == nullptr)
-    error("reduce_region_radius: invalid image 'angles'.");
-
-  /* compute region points density */
-  density = (double) *reg_size /
-      (dist(rec->x1, rec->y1, rec->x2, rec->y2) * rec->width);
-
-  /* if the density criterion is satisfied there is nothing to do */
-  if (density >= density_th) return TRUE;
-
-  /* compute region's radius */
-  xc = (double) reg[0].x;
-  yc = (double) reg[0].y;
-  rad1 = dist(xc, yc, rec->x1, rec->y1);
-  rad2 = dist(xc, yc, rec->x2, rec->y2);
-  rad = rad1 > rad2 ? rad1 : rad2;
-
-  /* while the density criterion is not satisfied, remove farther pixels */
-  while (density < density_th) {
-    rad *= 0.75; /* reduce region's radius to 75% of its value */
-
-    /* remove points from the region and update 'used' map */
-    for (i = 0; i < *reg_size; i++)
-      if (dist(xc, yc, (double) reg[i].x, (double) reg[i].y) > rad) {
-        /* point not kept, mark it as NOTUSED */
-        used->data[reg[i].x + reg[i].y * used->xsize] = NOTUSED;
-        /* remove point from the region */
-        reg[i].x = reg[*reg_size - 1].x; /* if i==*reg_size-1 copy itself */
-        reg[i].y = reg[*reg_size - 1].y;
-        --(*reg_size);
-        --i; /* to avoid skipping one point */
-      }
-
-    /* reject if the region is too small.
-       2 is the minimal region size for 'region2rect' to work. */
-    if (*reg_size < 2) return FALSE;
-
-    /* re-compute rectangle */
-    region2rect(reg, *reg_size, modgrad, reg_angle, prec, p, rec);
-
-    /* re-compute region points density */
-    density = (double) *reg_size /
-        (dist(rec->x1, rec->y1, rec->x2, rec->y2) * rec->width);
-  }
-
-  /* if this point is reached, the density criterion is satisfied */
-  return TRUE;
-}
-
-/*----------------------------------------------------------------------------*/
-/** Refine a rectangle.
-
-    For that, an estimation of the angle tolerance is performed by the
-    standard deviation of the angle at points near the region's
-    starting point. Then, a new region is grown starting from the same
-    point, but using the estimated angle tolerance. If this fails to
-    produce a rectangle with the right density of region points,
-    'reduce_region_radius' is called to try to satisfy this condition.
- */
-static int refine(struct point *reg, int *reg_size, image_double modgrad,
-                  double reg_angle, double prec, double p, struct rect *rec,
-                  image_char used, image_double angles, double density_th) {
-  double angle, ang_d, mean_angle, tau, density, xc, yc, ang_c, sum, s_sum;
-  int i, n;
-
-  /* check parameters */
-  if (reg == nullptr) error("refine: invalid pointer 'reg'.");
-  if (reg_size == nullptr) error("refine: invalid pointer 'reg_size'.");
-  if (prec < 0.0) error("refine: 'prec' must be positive.");
-  if (rec == nullptr) error("refine: invalid pointer 'rec'.");
-  if (used == nullptr || used->data == nullptr)
-    error("refine: invalid image 'used'.");
-  if (angles == nullptr || angles->data == nullptr)
-    error("refine: invalid image 'angles'.");
-
-  /* compute region points density */
-  density = (double) *reg_size /
-      (dist(rec->x1, rec->y1, rec->x2, rec->y2) * rec->width);
-
-  /* if the density criterion is satisfied there is nothing to do */
-  if (density >= density_th) return TRUE;
-
-  /*------ First try: reduce angle tolerance ------*/
-
-  /* compute the new mean angle and tolerance */
-  xc = (double) reg[0].x;
-  yc = (double) reg[0].y;
-  ang_c = angles->data[reg[0].x + reg[0].y * angles->xsize];
-  sum = s_sum = 0.0;
-  n = 0;
-  for (i = 0; i < *reg_size; i++) {
-    used->data[reg[i].x + reg[i].y * used->xsize] = NOTUSED;
-    if (dist(xc, yc, (double) reg[i].x, (double) reg[i].y) < rec->width) {
-      angle = angles->data[reg[i].x + reg[i].y * angles->xsize];
-      ang_d = angle_diff_signed(angle, ang_c);
-      sum += ang_d;
-      s_sum += ang_d * ang_d;
-      ++n;
-    }
-  }
-  mean_angle = sum / (double) n;
-  tau = 2.0 * sqrt((s_sum - 2.0 * mean_angle * sum) / (double) n
-                       + mean_angle * mean_angle); /* 2 * standard deviation */
-
-  /* find a new region from the same starting point and new angle tolerance */
-  region_grow(reg[0].x, reg[0].y, angles, reg, reg_size, &reg_angle, used, tau);
-
-  /* if the region is too small, reject */
-  if (*reg_size < 2) return FALSE;
-
-  /* re-compute rectangle */
-  region2rect(reg, *reg_size, modgrad, reg_angle, prec, p, rec);
-
-  /* re-compute region points density */
-  density = (double) *reg_size /
-      (dist(rec->x1, rec->y1, rec->x2, rec->y2) * rec->width);
-
-  /*------ Second try: reduce region radius ------*/
-  if (density < density_th)
-    return reduce_region_radius(reg, reg_size, modgrad, reg_angle, prec, p,
-                                rec, used, angles, density_th);
-
-  /* if this point is reached, the density criterion is satisfied */
-  return TRUE;
-}
-
 
 /*----------------------------------------------------------------------------*/
 /*-------------------------- Line Segment Detector ---------------------------*/
@@ -1956,6 +1812,9 @@ static int refine(struct point *reg, int *reg_size, image_double modgrad,
 /*----------------------------------------------------------------------------*/
 /** LSD full interface.
  */
+#include <vector>
+#include <functional>
+#include <future>
 double *LineSegmentDetection(int *n_out,
                              double *img, int X, int Y,
                              double scale, double sigma_scale, double quant,
@@ -2050,6 +1909,17 @@ double *LineSegmentDetection(int *n_out,
   reg = (struct point *) calloc((size_t) (xsize * ysize), sizeof(struct point));
   if (reg == nullptr) error("not enough memory!");
 
+  int start_reg_idx = 0;
+
+  struct entry {
+    int reg_size;
+    double reg_angle;
+    int start_idx;
+  };
+
+  const unsigned int number_threads = 16;
+  std::vector<std::vector<entry>> entries(number_threads);
+  int amount = 0;
 
   /* search for line segments */
   for (; list_p != nullptr; list_p = list_p->next)
@@ -2060,56 +1930,84 @@ double *LineSegmentDetection(int *n_out,
     {
       /* find the region of connected point and ~equal angle */
       region_grow(list_p->x, list_p->y, angles, reg, &reg_size,
-                  &reg_angle, used, prec);
+                  &reg_angle, used, prec, start_reg_idx);
+
+      int prev_start_idx = start_reg_idx;
+
+      start_reg_idx += reg_size;
 
       /* reject small regions */
       if (reg_size < min_reg_size) continue;
 
-      /* construct rectangular approximation for the region */
-      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec);
+      entries[amount++ % number_threads].push_back({
+        .reg_size = reg_size,
+        .reg_angle = reg_angle,
+        .start_idx = prev_start_idx
+      });
+    }
 
-      /* Check if the rectangle exceeds the minimal density of
-         region points. If not, try to improve the region.
-         The rectangle will be rejected if the final one does
-         not fulfill the minimal density condition.
-         This is an addition to the original LSD algorithm published in
-         "LSD: A Fast Line Segment Detector with a False Detection Control"
-         by R. Grompone von Gioi, J. Jakubowicz, J.M. Morel, and G. Randall.
-         The original algorithm is obtained with density_th = 0.0.
-       */
-      // if (!refine(reg, &reg_size, modgrad, reg_angle,
-      //             prec, p, &rec, used, angles, density_th))
-      //   continue;
+  std::function worker = [&](int idx) {
+    std::vector<struct rect> output;
+    for(const auto [reg_size, reg_angle, start_reg_idx]: entries[idx]) {
+        struct rect rec;
+        /* construct rectangular approximation for the region */
+        region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec, start_reg_idx);
 
-      /* compute NFA value */
-      if(grad_nfa)
-        log_nfa = rect_improve(&rec, img_grad_angle, logNT, log_eps);
-      else
-        log_nfa = rect_improve(&rec, angles, logNT, log_eps);
-      if (log_nfa <= log_eps) continue;
+        /* Check if the rectangle exceeds the minimal density of
+           region points. If not, try to improve the region.
+           The rectangle will be rejected if the final one does
+           not fulfill the minimal density condition.
+           This is an addition to the original LSD algorithm published in
+           "LSD: A Fast Line Segment Detector with a False Detection Control"
+           by R. Grompone von Gioi, J. Jakubowicz, J.M. Morel, and G. Randall.
+           The original algorithm is obtained with density_th = 0.0.
+         */
+        // if (!refine(reg, &reg_size, modgrad, reg_angle,
+        //             prec, p, &rec, used, angles, density_th))
+        //   continue;
 
-      /* A New Line Segment was found! */
-      ++ls_count;  /* increase line segment counter */
+        /* compute NFA value */
+        if(grad_nfa)
+          log_nfa = rect_improve(&rec, img_grad_angle, logNT, log_eps);
+        else
+          log_nfa = rect_improve(&rec, angles, logNT, log_eps);
+        if (log_nfa <= log_eps) continue;
 
-      /*
-         The gradient was computed with a 2x2 mask, its value corresponds to
-         points with an offset of (0.5,0.5), that should be added to output.
-         The coordinates origin is at the center of pixel (0,0).
-       */
-      // rec.x1 += 0.5;
-      // rec.y1 += 0.5;
-      // rec.x2 += 0.5;
-      // rec.y2 += 0.5;
+        /* A New Line Segment was found! */
+        ++ls_count;  /* increase line segment counter */
 
-      /* scale the result values if a subsampling was performed */
-      if (scale != 1.0) {
-        rec.x1 /= scale;
-        rec.y1 /= scale;
-        rec.x2 /= scale;
-        rec.y2 /= scale;
-        rec.width /= scale;
-      }
+        /*
+           The gradient was computed with a 2x2 mask, its value corresponds to
+           points with an offset of (0.5,0.5), that should be added to output.
+           The coordinates origin is at the center of pixel (0,0).
+         */
+        // rec.x1 += 0.5;
+        // rec.y1 += 0.5;
+        // rec.x2 += 0.5;
+        // rec.y2 += 0.5;
 
+        /* scale the result values if a subsampling was performed */
+        if (scale != 1.0) {
+          rec.x1 /= scale;
+          rec.y1 /= scale;
+          rec.x2 /= scale;
+          rec.y2 /= scale;
+          rec.width /= scale;
+        }
+
+      output.push_back(rec);
+    }
+
+    return output;
+  };
+
+  std::vector<std::future<std::vector<struct rect>>> futures(number_threads);
+  for(int current_thread = 0; current_thread < futures.size(); current_thread++) {
+    futures[current_thread] = std::async(std::launch::async, worker, current_thread);
+  }
+
+  for(auto &future: futures) {
+    for(const rect rec: future.get()) {
       /* add line segment found to output */
       add_7tuple(out, rec.x1, rec.y1, rec.x2, rec.y2,
                  rec.width, rec.p, log_nfa);
@@ -2119,6 +2017,7 @@ double *LineSegmentDetection(int *n_out,
         for (i = 0; i < reg_size; i++)
           region->data[reg[i].x + reg[i].y * region->xsize] = ls_count;
     }
+  }
 
 
   /* free memory */
@@ -2322,13 +2221,13 @@ double *LineSegmentDetectionOptimal(int *n_out,
     {
       /* find the region of connected point and ~equal angle */
       region_grow(list_p->x, list_p->y, angles, reg, &reg_size,
-                  &reg_angle, used, prec);
+                  &reg_angle, used, prec, 0);
 
       /* reject small regions */
       if (reg_size < min_reg_size) continue;
 
       /* construct rectangular approximation for the region */
-      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec);
+      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec, 0);
 
       /* Check if the rectangle exceeds the minimal density of
          region points. If not, try to improve the region.
@@ -2672,13 +2571,13 @@ double *LineSegmentDetectionDF(int *n_out,
     {
       /* find the region of connected point and ~equal angle */
       region_grow(list_p->x, list_p->y, angles, reg, &reg_size,
-                  &reg_angle, used, prec);
+                  &reg_angle, used, prec, 0);
 
       /* reject small regions */
       if (reg_size < min_reg_size) continue;
 
       /* construct rectangular approximation for the region */
-      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec);
+      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec, 0);
 
       /* Check if the rectangle exceeds the minimal density of
          region points. If not, try to improve the region.
@@ -2794,9 +2693,9 @@ double *LineSegmentDetectionFromPoints(int *n_out,
   void *mem_p, *mem_pp;
   struct rect rec;
   struct point *reg;
-  int reg_size, min_reg_size, i;
+  int min_reg_size, i;
   unsigned int xsize, ysize;
-  double rho, reg_angle, prec, p, log_nfa, logNT;
+  double rho, prec, p, log_nfa, logNT;
   int ls_count = 0;                   /* line segments are numbered 1,2,3,... */
 
   /* check parameters */
@@ -2858,7 +2757,7 @@ double *LineSegmentDetectionFromPoints(int *n_out,
   reg = (struct point *) calloc((size_t) (xsize * ysize), sizeof(struct point));
   if (reg == nullptr) error("not enough memory!");
 
-  int counter = 0;
+  int start_reg_idx = 0;
   for(int i = 0; i < number_points;i++) {
     int x = points[2*i];
     int y = points[2*i+1];
@@ -2868,15 +2767,22 @@ double *LineSegmentDetectionFromPoints(int *n_out,
       // there is no risk of double comparison problems here
       //   because we are only interested in the exact NOTDEF value 
     {
+      // Two values are reg_size and reg_angle
+      int reg_size;
+      double reg_angle;
+      // Ensuite il faut encore deux valeurs, la start value de reg et la longeur de reg pour la fonction suivante
+
       // find the region of connected point and ~equal angle 
       region_grow(x, y, angles, reg, &reg_size,
-                  &reg_angle, used, prec);
+                  &reg_angle, used, prec, start_reg_idx);
+
+      /* construct rectangular approximation for the region */
+      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec, start_reg_idx);
+
+      start_reg_idx += reg_size;
 
       /* reject small regions */
       if (reg_size < min_reg_size) continue;
-
-      /* construct rectangular approximation for the region */
-      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec);
 
       /* Check if the rectangle exceeds the minimal density of
          region points. If not, try to improve the region.
@@ -3068,13 +2974,13 @@ int LineSegmentDetectionFromPointsLearn(int *n_out,
     {
       // find the region of connected point and ~equal angle
       region_grow(x, y, angles, reg, &reg_size,
-                  &reg_angle, used, prec);
+                  &reg_angle, used, prec, 0);
 
       /* reject small regions */
       if (reg_size < min_reg_size) continue;
 
       /* construct rectangular approximation for the region */
-      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec);
+      region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec, 0);
 
       /* Check if the rectangle exceeds the minimal density of
          region points. If not, try to improve the region.
