@@ -2729,18 +2729,6 @@ double *LineSegmentDetectionFromPoints(int *n_out,
 
   /* load and scale image (if necessary) and compute angle at each pixel */
   image = new_image_double_ptr((unsigned int) X, (unsigned int) Y, img);
-  scaled_image = gaussian_sampler(image, scale, sigma_scale);
-  if (scale != 1.0) {
-    if (grad_nfa)
-      ll_angle(scaled_image, rho, &list_pp, &mem_pp, img_gradnorm, img_grad_angle, (unsigned int) n_bins);
-    ll_angle(scaled_image, rho, &list_p, &mem_p, modgrad, angles, (unsigned int) n_bins);
-
-  } else {
-    if (grad_nfa)
-      ll_angle(image, rho, &list_pp, &mem_pp, img_gradnorm, img_grad_angle, (unsigned int) n_bins);
-    ll_angle(image, rho, &list_p, &mem_p, modgrad, angles, (unsigned int) n_bins);
-  }
-  free_image_double(scaled_image);
   xsize = angles->xsize;
   ysize = angles->ysize;
 
