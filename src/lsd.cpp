@@ -1949,6 +1949,7 @@ double *LineSegmentDetection(int *n_out,
     std::vector<struct rect> output;
     for(const auto [reg_size, reg_angle, start_reg_idx]: entries[idx]) {
         struct rect rec;
+        double log_nfa;
         /* construct rectangular approximation for the region */
         region2rect(reg, reg_size, modgrad, reg_angle, prec, p, &rec, start_reg_idx);
 
