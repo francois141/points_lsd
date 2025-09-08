@@ -878,13 +878,6 @@ static int isaligned(int x, int y, image_double angles, double theta,
                      double prec) {
   double a;
 
-  /* check parameters */
-  if (angles == nullptr || angles->data == nullptr)
-    error("isaligned: invalid image 'angles'.");
-  if (x < 0 || y < 0 || x >= (int) angles->xsize || y >= (int) angles->ysize)
-    error("isaligned: (x,y) out of the image.");
-  if (prec < 0.0) error("isaligned: 'prec' must be positive.");
-
   /* angle at pixel (x,y) */
   a = angles->data[x + y * angles->xsize];
 
@@ -1663,17 +1656,6 @@ static void region_grow(int x, int y, image_double angles, struct point *reg,
   double sumdx, sumdy;
   int xx, yy, i;
 
-  /* check parameters */
-  if (x < 0 || y < 0 || x >= (int) angles->xsize || y >= (int) angles->ysize)
-    error("region_grow: (x,y) out of the image.");
-  if (angles == nullptr || angles->data == nullptr)
-    error("region_grow: invalid image 'angles'.");
-  if (reg == nullptr) error("region_grow: invalid 'reg'.");
-  if (reg_size == nullptr) error("region_grow: invalid pointer 'reg_size'.");
-  if (reg_angle == nullptr) error("region_grow: invalid pointer 'reg_angle'.");
-  if (used == nullptr || used->data == nullptr)
-    error("region_grow: invalid image 'used'.");
-
   /* first point of the region */
   *reg_size = 1;
   reg[0].x = x;
@@ -1687,8 +1669,9 @@ static void region_grow(int x, int y, image_double angles, struct point *reg,
   for (i = 0; i < *reg_size; i++)
     for (xx = reg[i].x - 1; xx <= reg[i].x + 1; xx++)
       for (yy = reg[i].y - 1; yy <= reg[i].y + 1; yy++)
-        if (xx >= 0 && yy >= 0 && xx < (int) used->xsize && yy < (int) used->ysize &&
-            used->data[xx + yy * used->xsize] != USED &&
+        if ((unsigned)xx < (unsigned)used->xsize &&
+            (unsigned)yy < (unsigned)used->ysize &&
+            used->data[xx + (size_t)yy * used->xsize] != USED &&
             isaligned(xx, yy, angles, *reg_angle, prec)) {
           /* add point */
           used->data[xx + yy * used->xsize] = USED;
