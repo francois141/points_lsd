@@ -1,32 +1,37 @@
-
 [build-system]
-requires = [
-    "setuptools>=42",
-    "wheel",
-    "ninja",
-    "cmake>=3.12",
-]
+requires = ["setuptools>=77", "cmake>=3.15", "ninja; platform_system != 'Windows'"]
 build-backend = "setuptools.build_meta"
 
-[tool.mypy]
-files = "setup.py"
-python_version = "3.7"
-strict = true
-show_error_codes = true
-enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-warn_unreachable = true
+[project]
+name = "points-lsd"
+version = "0.1.0"
+description = "Point-seeded LSD (Line Segment Detector) bindings used by UPAL"
+readme = "README.md"
+license = "AGPL-3.0-or-later AND MIT AND BSD-3-Clause"
+license-files = ["LICENSE", "LICENSES/AGPL-3.0-or-later.txt", "pybind11/LICENSE"]
+requires-python = ">=3.10"
+authors = [
+    { name = "François Costa" },
+    { name = "Raphael Kreft" },
+    { name = "Iago Suárez" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = ["numpy>=1.24"]
 
-[[tool.mypy.overrides]]
-module = ["ninja"]
-ignore_missing_imports = true
+[project.optional-dependencies]
+test = ["pytest>=7", "opencv-python-headless>=4.8", "scipy>=1.10", "scikit-image>=0.21"]
 
+[project.urls]
+Repository = "https://github.com/francois141/points_lsd"
+Upstream = "https://github.com/iago-suarez/pytlsd"
+Paper = "https://arxiv.org/abs/2608.19894"
 
-[tool.pytest.ini_options]
-minversion = "6.0"
-addopts = ["-ra", "--showlocals", "--strict-markers", "--strict-config"]
-xfail_strict = true
-filterwarnings = ["error"]
-testpaths = ["tests"]
+[tool.setuptools]
+packages = []
 
 [tool.cibuildwheel]
 test-command = "pytest {project}/tests"

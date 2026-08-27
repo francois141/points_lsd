@@ -420,12 +420,12 @@ py::array_t<float> run_lsd_df(const py::array_t<double>& img,
 
 
 
-PYBIND11_MODULE(pytlsd, m) {
+PYBIND11_MODULE(points_lsd, m) {
     m.doc() = R"pbdoc(
-        Python transparent bindings for LSD (Line Segment Detector)
+        Point-seeded LSD (Line Segment Detector) bindings used by UPAL
         -----------------------
 
-        .. currentmodule:: pytlsd
+        .. currentmodule:: points_lsd
 
         .. autosummary::
            :toctree: _generate
@@ -503,11 +503,9 @@ PYBIND11_MODULE(pytlsd, m) {
           py::arg("grad_nfa") = false);
 
 
-#ifndef _MSC_VER
 #ifdef VERSION_INFO
     m.attr("__version__") = MACRO_STRINGIFY(VERSION_INFO);
 #else
     m.attr("__version__") = "dev";
-#endif
 #endif
 }
