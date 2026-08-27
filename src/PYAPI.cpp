@@ -1,11 +1,16 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <iostream>
+#include <string>
 #include "lsd.h"
 
 #define STRINGIFY(x) #x
 #define MACRO_STRINGIFY(x) STRINGIFY(x)
 namespace py = pybind11;
+
+// All inputs are copied to C-contiguous, correctly typed buffers before raw pointers are taken.
+using DoubleArray = py::array_t<double, py::array::c_style | py::array::forcecast>;
+using IntArray = py::array_t<int, py::array::c_style | py::array::forcecast>;
 
 void check_img_format(const py::buffer_info& correct_info, const py::buffer_info& info, std::string name=""){
   std::stringstream ss;
@@ -36,12 +41,12 @@ struct LineSegment
 
 // Passing in a generic array
 // Passing in an array of doubles
-py::array_t<float> run_lsd(const py::array_t<double>& img,
+py::array_t<float> run_lsd(const DoubleArray& img,
                            double scale=0.8,
                            double sigma_scale=0.6,
                            double density_th=0.0, /* Minimal density of region points in rectangle. */
-                           const py::array_t<double>& gradnorm = py::array_t<double>(),
-                           const py::array_t<double>& gradangle = py::array_t<double>(),
+                           const DoubleArray& gradnorm = DoubleArray(),
+                           const DoubleArray& gradangle = DoubleArray(),
                            bool grad_nfa = false) {
   double quant = 2.0;       /* Bound to the quantization error on the
                                 gradient norm.                                */
@@ -89,19 +94,18 @@ py::array_t<float> run_lsd(const py::array_t<double>& img,
     segments[py::make_tuple(i, 2)] = out[7 * i + 2];
     segments[py::make_tuple(i, 3)] = out[7 * i + 3];
     segments[py::make_tuple(i, 4)] = out[7 * i + 5];
-    // p:           out[7 * i + 4]);
-    // -log10(NFA): out[7 * i + 5]);
+    // Dropped: width = out[7 * i + 4], -log10(NFA) = out[7 * i + 6]; column 4 above is p.
   }
   free((void *) out);
   return segments;
 }
 
-py::array_t<float> run_lsd_opt(const py::array_t<double>& img,
+py::array_t<float> run_lsd_opt(const DoubleArray& img,
                            double scale=0.8,
                            double sigma_scale=0.6,
                            double density_th=0.0, /* Minimal density of region points in rectangle. */
-                           const py::array_t<double>& gradnorm = py::array_t<double>(),
-                           const py::array_t<double>& gradangle = py::array_t<double>(),
+                           const DoubleArray& gradnorm = DoubleArray(),
+                           const DoubleArray& gradangle = DoubleArray(),
                            bool grad_nfa = false) {
   double quant = 2.0;       /* Bound to the quantization error on the
                                 gradient norm.                                */
@@ -149,19 +153,18 @@ py::array_t<float> run_lsd_opt(const py::array_t<double>& img,
     segments[py::make_tuple(i, 2)] = out[7 * i + 2];
     segments[py::make_tuple(i, 3)] = out[7 * i + 3];
     segments[py::make_tuple(i, 4)] = out[7 * i + 5];
-    // p:           out[7 * i + 4]);
-    // -log10(NFA): out[7 * i + 5]);
+    // Dropped: width = out[7 * i + 4], -log10(NFA) = out[7 * i + 6]; column 4 above is p.
   }
   free((void *) out);
   return segments;
 }
 
-py::list batched_run_lsd(const py::array_t<double>& img,
+py::list batched_run_lsd(const DoubleArray& img,
                                    double scale=0.8,
                                    double sigma_scale=0.6,
                                    double density_th=0.0, /* Minimal density of region points in rectangle. */
-                                   const py::array_t<double>& gradnorm = py::array_t<double>(),
-                                   const py::array_t<double>& gradangle = py::array_t<double>(),
+                                   const DoubleArray& gradnorm = DoubleArray(),
+                                   const DoubleArray& gradangle = DoubleArray(),
                                    bool grad_nfa = false) {
   double quant = 2.0;       /* Bound to the quantization error on the
                                 gradient norm.                                */
@@ -241,13 +244,24 @@ py::list batched_run_lsd(const py::array_t<double>& img,
 
 // Passing in a generic array
 // Passing in an array of doubles
-py::array_t<float> run_lsd_from_points(const py::array_t<double>& img,
-  const py::array_t<int> &points,
+static void check_points_in_bounds(const int *points, int number_points, size_t width, size_t height) {
+  for (int i = 0; i < number_points; i++) {
+    const int x = points[2 * i];
+    const int y = points[2 * i + 1];
+    if (x < 0 || y < 0 || static_cast<size_t>(x) >= width || static_cast<size_t>(y) >= height) {
+      throw py::value_error("Error: seed point (" + std::to_string(x) + ", " + std::to_string(y) +
+                            ") lies outside the image.");
+    }
+  }
+}
+
+py::array_t<float> run_lsd_from_points(const DoubleArray& img,
+  const IntArray& points,
                            double scale=1.0,
                            double sigma_scale=0.6,
                            double density_th=0.0, /* Minimal density of region points in rectangle. */
-                           const py::array_t<double>& gradnorm = py::array_t<double>(),
-                           const py::array_t<double>& gradangle = py::array_t<double>(),
+                           const DoubleArray& gradnorm = DoubleArray(),
+                           const DoubleArray& gradangle = DoubleArray(),
                            bool grad_nfa = false) {
   double quant = 2.0;       /* Bound to the quantization error on the
                                 gradient norm.                                */
@@ -280,8 +294,21 @@ py::array_t<float> run_lsd_from_points(const py::array_t<double>& img,
     throw py::type_error("Error: You should provide a 2 dimensional array.");
   }
 
+  if (grad_nfa) {
+    throw py::value_error("Error: 'grad_nfa' is not supported by lsd_from_points.");
+  }
+  if (modgrad_ptr == nullptr || angles_ptr == nullptr) {
+    throw py::value_error(
+      "Error: lsd_from_points requires explicit 'gradnorm' and 'gradangle' maps "
+      "(float64, same shape as the image, undefined pixels set to -1024.0).");
+  }
+
   py::buffer_info points_info = points.request();
+  if (points_info.ndim != 2 || points_info.shape[1] != 2) {
+    throw py::type_error("Error: 'points' must be an N x 2 int32 array of (x, y) seeds.");
+  }
   int number_points = points_info.shape[0];
+  check_points_in_bounds(static_cast<int *>(points_info.ptr), number_points, info.shape[1], info.shape[0]);
 
   double *imagePtr = static_cast<double *>(info.ptr);
   int *pointsPtr = static_cast<int *>(points_info.ptr);
@@ -299,20 +326,19 @@ py::array_t<float> run_lsd_from_points(const py::array_t<double>& img,
     segments[py::make_tuple(i, 2)] = out[7 * i + 2];
     segments[py::make_tuple(i, 3)] = out[7 * i + 3];
     segments[py::make_tuple(i, 4)] = out[7 * i + 5];
-    // p:           out[7 * i + 4]);
-    // -log10(NFA): out[7 * i + 5]);
+    // Dropped: width = out[7 * i + 4], -log10(NFA) = out[7 * i + 6]; column 4 above is p.
   }
   free((void *) out);
   return segments;
 }
 
-int run_lsd_from_points_learn(const py::array_t<double>& img,
-  const py::array_t<int> &points,
+int run_lsd_from_points_learn(const DoubleArray& img,
+  const IntArray& points,
                            double scale=1.0,
                            double sigma_scale=0.6,
                            double density_th=0.0, /* Minimal density of region points in rectangle. */
-                           const py::array_t<double>& gradnorm = py::array_t<double>(),
-                           const py::array_t<double>& gradangle = py::array_t<double>(),
+                           const DoubleArray& gradnorm = DoubleArray(),
+                           const DoubleArray& gradangle = DoubleArray(),
                            bool grad_nfa = false) {
   double quant = 2.0;       /* Bound to the quantization error on the
                                 gradient norm.                                */
@@ -345,8 +371,21 @@ int run_lsd_from_points_learn(const py::array_t<double>& img,
     throw py::type_error("Error: You should provide a 2 dimensional array.");
   }
 
+  if (grad_nfa) {
+    throw py::value_error("Error: 'grad_nfa' is not supported by lsd_from_points.");
+  }
+  if (modgrad_ptr == nullptr || angles_ptr == nullptr) {
+    throw py::value_error(
+      "Error: lsd_from_points requires explicit 'gradnorm' and 'gradangle' maps "
+      "(float64, same shape as the image, undefined pixels set to -1024.0).");
+  }
+
   py::buffer_info points_info = points.request();
+  if (points_info.ndim != 2 || points_info.shape[1] != 2) {
+    throw py::type_error("Error: 'points' must be an N x 2 int32 array of (x, y) seeds.");
+  }
   int number_points = points_info.shape[0];
+  check_points_in_bounds(static_cast<int *>(points_info.ptr), number_points, info.shape[1], info.shape[0]);
 
   double *imagePtr = static_cast<double *>(info.ptr);
   int *pointsPtr = static_cast<int *>(points_info.ptr);
@@ -358,12 +397,12 @@ int run_lsd_from_points_learn(const py::array_t<double>& img,
     ang_th, log_eps, density_th, n_bins, grad_nfa, modgrad_ptr, angles_ptr, pointsPtr, number_points, nullptr, nullptr, nullptr);
 }
 
-py::array_t<float> run_lsd_df(const py::array_t<double>& img,
+py::array_t<float> run_lsd_df(const DoubleArray& img,
                            double scale=0.8,
                            double sigma_scale=0.6,
                            double density_th=0.0, /* Minimal density of region points in rectangle. */
-                           const py::array_t<double>& gradnorm = py::array_t<double>(),
-                           const py::array_t<double>& gradangle = py::array_t<double>(),
+                           const DoubleArray& gradnorm = DoubleArray(),
+                           const DoubleArray& gradangle = DoubleArray(),
                            bool grad_nfa = false) {
   double quant = 2.0;       /* Bound to the quantization error on the
                                 gradient norm.                                */
@@ -411,8 +450,7 @@ py::array_t<float> run_lsd_df(const py::array_t<double>& img,
     segments[py::make_tuple(i, 2)] = out[7 * i + 2];
     segments[py::make_tuple(i, 3)] = out[7 * i + 3];
     segments[py::make_tuple(i, 4)] = out[7 * i + 5];
-    // p:           out[7 * i + 4]);
-    // -log10(NFA): out[7 * i + 5]);
+    // Dropped: width = out[7 * i + 4], -log10(NFA) = out[7 * i + 6]; column 4 above is p.
   }
   free((void *) out);
   return segments;
