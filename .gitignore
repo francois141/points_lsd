@@ -1,8 +1,12 @@
 /build/
 /dist/
-.idea/*
+/wheelhouse/
+.idea/
 *.pyc
+__pycache__/
 cmake-build-*
-/venv/*
+/venv/
+/.venv*/
 *.egg-info/
 *.so
+*.pyd

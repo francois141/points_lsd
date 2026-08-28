@@ -1,10 +1,6 @@
-build>=0.4.0
-numpy>=1.19.5
-opencv-python>=4.5.2.54
-Pillow>=8.2.0
-scikit-image>=0.17.2
-scikit-build
-scipy>=1.5.4
-pytest
-wheel
-setuptools
+# Development / test dependencies; runtime needs only numpy (see pyproject.toml).
+numpy>=1.24
+pytest>=7
+opencv-python-headless>=4.8
+scipy>=1.10
+scikit-image>=0.21

@@ -1,50 +1,41 @@
-cmake_minimum_required(VERSION 3.4...3.18)
-project(pytlsd)
+cmake_minimum_required(VERSION 3.15...3.30)
+project(points_lsd LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w -std=c++17")
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+option(POINTS_LSD_BUILD_TESTS "Build the C++ test executable (requires OpenCV)" OFF)
+# OpenMP only parallelises batched_lsd and adds a runtime DLL/dylib dependency to wheels; keep it opt-in.
+option(POINTS_LSD_USE_OPENMP "Link OpenMP for the batched entry point" OFF)
 
 add_subdirectory(pybind11)
 
-###################################### OpenCV ######################################
-find_package(OpenCV QUIET)
-message( STATUS "    OpenCV_DIR: " ${OpenCV_DIR})
-message( STATUS "    OpenCV_INCLUDE_DIRS: " ${OpenCV_INCLUDE_DIRS})
-message( STATUS "    OpenCV_LIBS: " ${OpenCV_LIBS})
-include_directories(${OpenCV_INCLUDE_DIRS})
-
-find_package(OpenMP)
-if(OpenMP_CXX_FOUND)
-    set(OpenMP_LIBS OpenMP::OpenMP_CXX)
+if(POINTS_LSD_USE_OPENMP)
+    find_package(OpenMP REQUIRED)
 endif()
 
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+# Core LSD library (pure C++, no external dependencies).
+add_library(tlsd STATIC src/lsd.cpp)
+target_include_directories(tlsd PUBLIC src)
+if(NOT MSVC)
+    target_compile_options(tlsd PRIVATE -w)
+endif()
 
-# Declare the library containing the Line segment Detection (LSD) code
-include_directories(src)
-add_library(tlsd src/lsd.cpp)
+# Python bindings.
+pybind11_add_module(points_lsd src/PYAPI.cpp)
+target_link_libraries(points_lsd PRIVATE tlsd)
+if(POINTS_LSD_USE_OPENMP)
+    target_link_libraries(points_lsd PRIVATE OpenMP::OpenMP_CXX)
+endif()
+if(POINTS_LSD_VERSION_INFO)
+    target_compile_definitions(points_lsd PRIVATE VERSION_INFO=${POINTS_LSD_VERSION_INFO})
+endif()
 
-# Create the python bindings
-pybind11_add_module(pytlsd src/PYAPI.cpp)
-
-# Add the dependency between the LSD code and the bindings
-target_link_libraries(pytlsd PRIVATE tlsd ${OpenCV_LIBS} ${OpenMP_LIBS})
-
-target_compile_definitions(pytlsd PRIVATE VERSION_INFO=${EXAMPLE_VERSION_INFO})
-
-enable_testing()
-
-find_package(OpenCV QUIET)
-if(${OpenCV_FOUND})
-    message( STATUS "    OpenCV_DIR: " ${OpenCV_DIR})
-    message( STATUS "    OpenCV_INCLUDE_DIRS: " ${OpenCV_INCLUDE_DIRS})
-    message( STATUS "    OpenCV_LIBS: " ${OpenCV_LIBS})
-
+# Optional C++ test, needs OpenCV.
+if(POINTS_LSD_BUILD_TESTS)
+    find_package(OpenCV REQUIRED)
     add_executable(test_tlsd tests/test_tlsd.cpp)
     target_include_directories(test_tlsd PRIVATE ${OpenCV_INCLUDE_DIRS})
     target_link_libraries(test_tlsd PRIVATE tlsd ${OpenCV_LIBS})
-    add_test(test_tlsd test_tlsd)
-else(${OpenCV_FOUND})
-    message( STATUS "OpenCV Not Found -- Tests disabled")
-endif(${OpenCV_FOUND})
+endif()

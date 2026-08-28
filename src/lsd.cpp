@@ -2773,8 +2773,10 @@ double *LineSegmentDetectionFromPoints(int *n_out,
   image_double scaled_image;
   image_char used;
   image_int region = nullptr;
-  struct coorlist *list_p, *list_pp;
-  void *mem_p, *mem_pp;
+  /* Never assigned on the point-seeded path (ll_angle is not called) but freed below;
+     initialise so that free() is a no-op instead of undefined behaviour. */
+  struct coorlist *list_p = nullptr, *list_pp = nullptr;
+  void *mem_p = nullptr, *mem_pp = nullptr;
   struct rect rec;
   struct point *reg;
   int reg_size, min_reg_size, i;
@@ -2971,8 +2973,10 @@ int LineSegmentDetectionFromPointsLearn(int *n_out,
   image_double scaled_image;
   image_char used;
   image_int region = nullptr;
-  struct coorlist *list_p, *list_pp;
-  void *mem_p, *mem_pp;
+  /* Never assigned on the point-seeded path (ll_angle is not called) but freed below;
+     initialise so that free() is a no-op instead of undefined behaviour. */
+  struct coorlist *list_p = nullptr, *list_pp = nullptr;
+  void *mem_p = nullptr, *mem_pp = nullptr;
   struct rect rec;
   struct point *reg;
   int reg_size, min_reg_size, i;
