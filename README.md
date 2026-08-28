@@ -32,8 +32,8 @@ pip install ./points_lsd
 
 `lsd_from_points` needs the image, integer `(x, y)` seed pixels, and gradient norm/angle maps.
 The maps are float64 arrays of the image's shape with undefined pixels set to `-1024.0`; the
-snippet below computes them the way LSD does (2x2 finite differences), but any gradient — e.g.
-one derived from a learned line distance field — can be supplied.
+snippet below computes them the way LSD does (2x2 finite differences), but any gradient, such
+as one derived from a learned line distance field, can be supplied.
 
 ```python
 import numpy as np
@@ -74,12 +74,77 @@ pip install -e ".[test]"
 pytest tests            # test_smoke.py is numpy-only; test_lsd.py needs the [test] extra
 ```
 
-Wheels are built with [cibuildwheel](https://cibuildwheel.pypa.io) in
-`.github/workflows/wheels.yml` and published to PyPI on `v*` tags. To build them locally:
+## Wheels and publishing
+
+### Supported wheels
+
+Built with [cibuildwheel](https://cibuildwheel.pypa.io) (config in `pyproject.toml`
+under `[tool.cibuildwheel]`) for CPython 3.10, 3.11, 3.12, 3.13 and 3.14:
+
+| Platform | Architectures | Wheel tag |
+|---|---|---|
+| Linux (glibc ≥ 2.24) | x86_64, aarch64 | `manylinux_2_24_*.manylinux_2_28_*` |
+| macOS | arm64 (≥ 11.0), x86_64 (≥ 10.9–10.15, per Python build) | `macosx_*` |
+| Windows | AMD64 | `win_amd64` |
+
+That is 25 wheels plus an sdist per release. Not built: musllinux (Alpine), PyPy,
+free-threaded CPython and 32-bit platforms. On a compatible platform, pip can build from
+the sdist with a C++17 compiler and CMake ≥ 3.15. The extension has no required external
+native libraries. OpenMP support and the OpenCV-dependent C++ tests are opt-in and disabled
+for wheels.
+
+### How a release works
+
+`.github/workflows/wheels.yml` runs on every push to `main`, every pull request, every
+`v*` tag, and on manual dispatch. Every run builds all wheels and the sdist, smoke-tests
+the wheels in clean environments where the runner can execute them (macOS x86_64 is
+skipped on the arm64 runner), and runs the full test suite on Linux, macOS and Windows.
+What happens with the artifacts depends on the trigger:
+
+| Trigger | Publishes to |
+|---|---|
+| push to `main` / pull request | nothing (build + test only) |
+| manual run (*Actions → Wheels → Run workflow*) with **Upload to TestPyPI** ticked | [TestPyPI](https://test.pypi.org/project/points-lsd/) |
+| push of a tag `vX.Y.Z` | [PyPI](https://pypi.org/project/points-lsd/) |
+
+Uploads use [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC),
+so no API tokens are stored. Before the first upload to an index, configure that index to
+trust this repository's `wheels.yml` workflow and its corresponding `pypi` or `testpypi`
+GitHub environment.
+
+**The version comes from `pyproject.toml`, not from git.** The tag only *triggers* the
+upload, and the `check_version` job refuses a tag that does not match
+`project.version` (tag `v0.1.0` ↔ `version = "0.1.0"`). A version can be uploaded to an
+index more than once only with new distribution filenames. Existing files cannot be
+overwritten, so replacing published artifacts requires a new version number.
+
+Release checklist:
 
 ```bash
-pipx run cibuildwheel --platform macos   # or linux (needs Docker)
+# 1. update project.version in pyproject.toml and land it on main
+git add pyproject.toml
+git commit -m "release: 0.2.0"
+git push origin main                                 # CI must be green
+
+# 2. optional dry run: Actions > Wheels > Run workflow > "Upload to TestPyPI", then
+pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "points-lsd==0.2.0"
+
+# 3. publish
+git tag v0.2.0
+git push origin v0.2.0                               # publish_pypi job uploads to PyPI
 ```
+
+### Building wheels locally
+
+```bash
+pipx run cibuildwheel --platform linux    # needs Docker; native arch, or set CIBW_ARCHS_LINUX
+pipx run cibuildwheel --platform macos    # needs the python.org CPython installers
+CIBW_BUILD="cp313-*" pipx run cibuildwheel --platform linux   # one interpreter only
+```
+
+cibuildwheel's Windows build must run on Windows (or in CI). A plain `pip wheel .` builds
+a single wheel for the current interpreter without cibuildwheel's portability repair and
+compatibility checks.
 
 ## License
 
